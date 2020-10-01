@@ -1,0 +1,286 @@
+---
+title: "Desafío Spike Septiembre 2020"
+author: "Lautaro Cantar"
+date: "01/Oct/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message = FALSE,
+                      warning = FALSE)
+```
+
+
+```{r}
+# Cargando paquetes a utilizar
+library(tidyverse)  # Manipulación y transformación de datos
+library(skimr)      # Tablas resumen sencillas
+library(lubridate)  # Manejo de fechas
+
+```
+
+# Preguntas
+
+## 1. Costos marginales
+
+* Carga el archivo `costo_marginal_real.csv`. Estos son los costos marginales reales observados.
+* Carga el archivo `costo_marginal_programado.csv`. Estos son los costos marginales previstos por el sistema.
+* Haz un merge del costos marginal real con el costo marginal programado a nivel de barra (*Ayuda: la columna de join no se llama igual en ambas bases! Los datos venían así del SIC *). Llama a esta nueva base `costo_marginal`.
+* Realiza un análisis exploratorio de la base resultante. ¿Qué puedes decir de las distintas variables? ¿Cómo distribuyen? En particular analiza las barras (barra_mnemotecnico). ¿Para cuántas barras se programa el costo? ¿Qué porcentaje es del total de barras que puedes observar en la base?
+
+### Resolución
+
+```{r}
+# Cargando los datasets
+costo_marginal_real <- read_csv("costo_marginal_real.csv")
+costo_marginal_programado <- read_csv("costo_marginal_programado.csv")
+```
+
+Antes de realizar el merge, se realizó una exploración de los datos de ambos archivos para evaluar su integridad y qué pasos eran necesarios tomar para su eventual limpieza. De tan exploración surge que los datos pertenecen todos al primer semestre del año 2019, que hay registros para las 24 horas del día salvo para la fecha _2019-04-06_ que tiene registros para la hora 25.
+
+Para el archivo `costo_marginal_real` en particular, se elimina la variable `barra_referencia_mnemotecnico` ya que tiene un único valor _"BA02T002SE032T002"_ a lo largo de todo el archivo y, por lo tanto, no suma valor.
+
+Para el archivo `costo_marginal_programado` se identificaron 4283 observaciones duplicadas en todas sus variables y fueron eliminadas. De las observaciones restantes, valores `r costo_marginal_programado %>% distinct() %>% nrow() - costo_marginal_programado %>% distinct(mnemotecnico_barra, fecha, hora) %>% nrow()` datos duplicados con los mismos valores de las siguientes variables: `mnemotecnico_barra`, `fecha` y `hora`. Por lo tanto para las observaciones con más de una observación con iguales variables, la variable `costo` es el promedio del costo de esas observaciones.
+
+Por último se realiza el merge por las variables `mnemotecnico_barra`, `fecha` y `hora`.
+
+```{r}
+# Limpiando los datos
+costo_marginal_real <- costo_marginal_real %>% 
+  select(-barra_referencia_mnemotecnico) %>%  # Elimino esta variable porque es un valor único
+  rename(costo_en_dolares_real = costo_en_dolares)
+
+costo_marginal_programado <- costo_marginal_programado %>% 
+  distinct() %>% 
+  group_by(mnemotecnico_barra, nombre_barra, fecha, hora) %>% 
+  summarise(costo_programado = mean(costo))
+
+# Realizando el merge
+costo_marginal <- costo_marginal_real %>% 
+  left_join(costo_marginal_programado, 
+            by = c("barra_mnemotecnico" = "mnemotecnico_barra", 
+                   "fecha" = "fecha", 
+                   "hora" = "hora"))
+```
+
+Para realizar el análisis exploratorio de la base resultante vamos a utilizar la variable `skimr::skim()` que nos brinda una gran cantidad de estadísticas descriptivas.
+
+Cuando se analizan las variables del tipo _"character"_ vemos que existen 1020 barras únicas (`barra_mnemotecnico`) pero tan solo se calcula el costo para el 21% de esas barras. Este dato se puede ver que la variable `nombre_barra` que proviene del dataset `costo_marginal_programado` tiene 3409022 variables NA. Luego se puede ver que siguen habiendo datos para el primer semestre de 2019 (181 días en total).
+
+Respecto a las variables numéricas, vemos que la variable `costo_programado` (costo marginal programado) también tiene tan solo el 21% de las observaciones completas. Un dato curioso es que dicha variable tiene valores negativos. Al explorar un poco más los datos, hay 279 valores que son negativos y están concentrados en 4 barras en particular: _"BA01G132SE001G132"_, _"BA01T002SE056T002"_, _"BA74T005SE278T005"_ y _"BA94G216SE031G216"_. Estos datos provienen así del archivo original. 
+
+```{r}
+skim(costo_marginal)
+```
+
+
+## 2. Construcción de variables
+
+Construye las siguientes variables para la base que creaste en el punto anterior:
+
+* `desviación`: la diferencia entre el costo real y el costo programado
+* `desviación_pct`: la misma desviación, pero en porcentaje
+* `desviacion_cat`: una variable categórica que vale 1 si la desviación_pct absoluta es mayor a 15% (esto es, si es menor a -15% o mayor a 15%)
+
+Describe la variable `desviacion_cat`. Qué puedes observar? Cambia a través del tiempo?
+
+### Resolución
+
+Para el cálculo de la variable `desviación_pct` se toma como base la variable `costo_programado`
+
+```{r}
+costo_marginal <- costo_marginal %>% 
+  mutate(desviacion = costo_en_dolares_real - costo_programado,
+         desviación_pct = desviacion/costo_programado,
+         desviacion_cat = case_when(desviación_pct > 0.15 | desviación_pct < -0.15 ~ 1))
+```
+
+```{r}
+vble_desviacion_cat <- costo_marginal %>%
+  filter(!is.na(desviación_pct)) %>% 
+  mutate(mes = fecha %>% month(),
+         desviacion_cat = case_when(desviacion_cat == 1 ~ 1,
+                                    TRUE ~ 0)) %>% 
+  group_by(mes, desviacion_cat) %>% 
+  tally()
+
+```
+
+Tal como se puede apreciar en el siguiente gráfico, a lo largo del paso de los meses, se ve como el porcentaje de las observaciones que tiene una desviación mayor o menor al 15% van disminuyendo.
+
+```{r, fig.align='center'}
+ggplot() + 
+  geom_col(data = vble_desviacion_cat, 
+           aes(x = mes, y = n, fill = factor(desviacion_cat))) +
+  labs(title = "Distribución desviacion_cat por mes",
+       fill = "desviacion_cat",
+       x = "Mes") +
+  theme_minimal()
+```
+
+
+## 3. Visualización de datos
+
+Crea la siguiente función: `def time_plot_costo_barra(codigo_barra, fecha_inicial, fecha_final)` que tome como input el código de una barra y haga un plot en el tiempo del costo marginal real y del costo marginal programado. El eje x debe ser el tiempo. `fecha_inicial` y `fecha_final` dan los límites de este plot. Úsa esta función para plotear algunas barras. Acá hay un ejemplo:
+
+Qué puedes concluir de estos plots?
+
+### Resolucion
+
+```{r}
+time_plot_costo_barra <- function(codigo_barra, 
+                                  fecha_inicial, 
+                                  fecha_final){
+  
+  d <- costo_marginal %>% 
+    filter(barra_mnemotecnico == codigo_barra) %>% # codigo_barra
+    filter(fecha >= fecha_inicial,
+           fecha <= fecha_final) %>% 
+    mutate(fecha = paste(fecha, paste0(hora, ":00:00")),
+           fecha = fecha %>% ymd_hms()) %>% 
+    select(barra_mnemotecnico, fecha, costo_en_dolares_real, costo_programado) %>% 
+    pivot_longer(!c(barra_mnemotecnico,fecha))
+  
+  ggplot() +
+    geom_line(data = d, 
+              aes(x = fecha, y = value, color = name), 
+              size = 0.8) +
+    labs(title = "Evolución Costo Marginal Real y Costo Marginal Programado",
+         subtitle = paste("Barra:", codigo_barra),
+         color = "Variable",
+         x = "Fecha",
+         y = "") +
+    theme_minimal()
+  
+}
+```
+
+
+```{r, fig.align='center'}
+time_plot_costo_barra("BA01G004SE017G004", "2019-06-01", "2019-06-30")
+time_plot_costo_barra("BA46G216SE021G216", "2019-01-01", "2019-06-30")
+```
+
+
+Además, identifica la barra que tiene cmg_real= 0 durante todos los días y elimínala de tu dataset.
+
+
+
+## 4. Base para los modelos
+
+Carga la base `base_para_predicción.csv`. Esta será la base principal para las siguientes preguntas.
+
+```{r}
+# Cargando los datasets
+base_para_prediccion <- read_csv("base_para_prediccion.csv")
+```
+
+
+* En rasgos generales, ¿Qué puedes decir de los datos? (dimensiones, tipo de datos, variables categóricas, variables numéricas, fechas).
+
+```{r}
+skim(base_para_prediccion)
+```
+
+```{r}
+base_para_prediccion <- base_para_prediccion %>% 
+  select(-c(gen_eolica_total_mwh, gen_geotermica_total_mwh)) %>% 
+  mutate(gen_hidraulica_total_mwh = gen_hidraulica_total_mwh %>% as.numeric())
+```
+
+* A partir de la variable fecha, crea nuevas variables para el año, mes, semana del año, dia del calendario, dia de la semana y una variable que indique si el dia corresponde a un día de semana o fin de semana. Estas features/variables te servirán para entrenar el modelo.
+
+```{r}
+base_para_prediccion <- base_para_prediccion %>% 
+  mutate(fecha = fecha %>% ymd_hms(),
+         anio = fecha %>% year(),
+         mes = fecha %>% month(),
+         semana = fecha %>% week(),
+         dia_calendario = fecha %>% day(),
+         dia_semana = fecha %>% wday(label = TRUE, abbr = FALSE),
+         fin_de_semana = case_when(dia_semana %in% c("Saturday", "Sunday") ~ 1,
+                                                     TRUE ~ 0))
+```
+
+
+* Implementa una función que para una subestación y una variable, grafique múltiples series de tiempo diarias correspondientes a una lista de fechas. Para esto, la función debe recibir como argumentos: código de una subestación, una variable (serie numérica), y una lista de fechas (año-mes-día). Por ejemplo: para la subestación SE005T002 y la variable gen_solar_total_mwh, la función debe graficar los perfiles diarios de generación solar por hora para las fechas '2019-01-10', '2019-02-10' y '2019-03-10'.
+
+```{r}
+plot_subestacion_variable <- function(codigo_sub_estacion,
+                                      variable_a_graficar,
+                                      fechas){
+  
+  d <- base_para_prediccion %>% 
+    mutate(fecha = fecha %>% as.character()) %>%
+    filter(nemotecnico_se == codigo_sub_estacion) %>% 
+    filter(fecha %in% fechas) %>% 
+    select(nemotecnico_se, fecha, hora, all_of(variable_a_graficar)) %>% 
+    rename(vble = all_of(variable_a_graficar))
+  
+  
+  ggplot() +
+    geom_line(data = d,
+              aes(x = hora, y = vble, color = fecha)) +
+    labs(title = "Serie de Tiempo Diaria",
+         subtitle = paste("Subetación:", codigo_sub_estacion, 
+                          "Tipo de Generación:", variable_a_graficar),
+         x = "Hora",
+         y = "",
+         color = "Fechas") +
+    theme_minimal()
+  
+}
+```
+
+* Grafica la curva de generación solar, por hora, en la subestación SE005T002 para las fechas del 10, 11, 12, 13 y 14 de enero de 2019. Haz lo mismo para la subestación SE127T005. Que podrías decir, en términos generales, sobre la generación solar y las dos subestaciones mencionadas, basados en estos dos gráficos?
+
+```{r, fig.align='center'}
+
+plot_subestacion_variable("SE005T002",
+                          "gen_solar_total_mwh",
+                          c("2019-01-10", "2019-01-11", "2019-01-12",
+                            "2019-01-13", "2019-01-14"))
+
+plot_subestacion_variable("SE127T005",
+                          "gen_solar_total_mwh",
+                          c("2019-01-10", "2019-01-11", "2019-01-12",
+                            "2019-01-13", "2019-01-14"))
+```
+
+* Grafica la curva de generación térmica, por hora, en la subestación SE020G213 para los días 14, 15, 16 y 17 de mayo de 2019. Haz lo mismo para la subestación SE106G216. Que podrías decir, en términos generales, sobre la generación térmica en esta subestación con respecto a este gráfico?
+
+```{r}
+plot_subestacion_variable("SE020G213",
+                          "gen_termica_total_mwh",
+                          c("2019-05-14", "2019-05-15", "2019-05-16",
+                            "2019-05-17"))
+
+plot_subestacion_variable("SE106G216",
+                          "gen_termica_total_mwh",
+                          c("2019-05-14", "2019-05-15", "2019-05-16",
+                            "2019-05-17"))
+```
+
+
+## 5. Predicción de desviaciones del costo marginal: modelo 1
+
+Crea una variable target que sea igual a cero cuando la variable cmg_desv_pct esté en el rango [-15,15], e igual uno para cualquier otro caso. Hint: recuerda que existen valores infinitos.
+
+Ahora crea los siguientes features:
+
+* en_total_mwh: suma de las cinco series de generación.
+lags y estadísticas acumuladas (por ejemplo: promedio, varianza) de las variables que consideres relevantes.
+Entrena un modelo que prediga si existirá una desviación en la hora siguiente. Adecúa la variable target para hacer esto posible.
+¿Cómo le va a tu modelo? ¿En qué métricas te basas y por qué?
+¿Cuales son las variables más importantes que considera este modelo?
+
+
+
+
+```{r}
+# Cargando los datasets
+datos_clima <- read_csv("datos_clima.csv")
+
+```
+
