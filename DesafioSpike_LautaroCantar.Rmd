@@ -126,6 +126,8 @@ Crea la siguiente función: `def time_plot_costo_barra(codigo_barra, fecha_inici
 
 Qué puedes concluir de estos plots?
 
+Además, identifica la barra que tiene cmg_real= 0 durante todos los días y elimínala de tu dataset.
+
 ### Resolucion
 
 ```{r}
@@ -156,15 +158,25 @@ time_plot_costo_barra <- function(codigo_barra,
 }
 ```
 
+La función se utilizó con dos barras y fechas elegidas manualmente al azar. Se puede ver quepara la barra _"BA01G004SE017G004"_ el `costo marginal programado` y el `costo marginal real` se comportan de una manera muy similar aunque el `costo marginal programado` siempre es superior. Para _"BA46G216SE021G216"_ la barra se pueden ver variaciones valores mucho mayores y en muchos casos el `costo marginal real` con valores muy cercanos a cero.
 
 ```{r, fig.align='center'}
 time_plot_costo_barra("BA01G004SE017G004", "2019-06-01", "2019-06-30")
 time_plot_costo_barra("BA46G216SE021G216", "2019-01-01", "2019-06-30")
 ```
 
+Eliminando las barras cuyos Costo Marginal es cero en todas sus filas.
 
-Además, identifica la barra que tiene cmg_real= 0 durante todos los días y elimínala de tu dataset.
+```{r}
+dat_soporte <- costo_marginal %>%
+  group_by(barra_mnemotecnico) %>%
+  summarise(suma_costo_mg_real_dolares = sum(costo_en_dolares_real),
+            n = n()) %>% 
+  filter(suma_costo_mg_real_dolares == 0)
 
+costo_marginal <- costo_marginal %>% 
+  filter(!barra_mnemotecnico %in% dat_soporte$barra_mnemotecnico)
+```
 
 
 ## 4. Base para los modelos
@@ -176,24 +188,37 @@ Carga la base `base_para_predicción.csv`. Esta será la base principal para las
 base_para_prediccion <- read_csv("base_para_prediccion.csv")
 ```
 
-
 * En rasgos generales, ¿Qué puedes decir de los datos? (dimensiones, tipo de datos, variables categóricas, variables numéricas, fechas).
+
+El dataset esta compuesto por `r nrow(base_para_prediccion)` observaciones y `r ncol(base_para_prediccion)` variables. El dataset se ve de la siguiente forma:
+
+```{r}
+base_para_prediccion %>% head() %>% knitr::kable()
+```
+
+
 
 ```{r}
 skim(base_para_prediccion)
 ```
 
+Tal como se puede ver, al cargar los datos las variables `gen_eolica_total_mwh`, `gen_geotermica_total_mwh` y `gen_hidraulica_total_mwh` se cargan como variables lógicas, por lo tanto hay que transformarlas. También se elimnan las variables que indiquen que la hora es mayor a 24.
+
 ```{r}
 base_para_prediccion <- base_para_prediccion %>% 
-  select(-c(gen_eolica_total_mwh, gen_geotermica_total_mwh)) %>% 
-  mutate(gen_hidraulica_total_mwh = gen_hidraulica_total_mwh %>% as.numeric())
+  mutate(gen_eolica_total_mwh = gen_eolica_total_mwh %>% as.numeric(),
+         gen_geotermica_total_mwh = gen_geotermica_total_mwh %>% as.numeric(),
+         gen_hidraulica_total_mwh = gen_hidraulica_total_mwh %>% as.numeric()) %>% 
+  filter(hora <= 24)
 ```
 
 * A partir de la variable fecha, crea nuevas variables para el año, mes, semana del año, dia del calendario, dia de la semana y una variable que indique si el dia corresponde a un día de semana o fin de semana. Estas features/variables te servirán para entrenar el modelo.
 
 ```{r}
-base_para_prediccion <- base_para_prediccion %>% 
+base_para_prediccion <- base_para_prediccion %>%
   mutate(fecha = fecha %>% ymd_hms(),
+         fecha_hora = paste(fecha, paste0(hora, ":00:00")),
+         fecha_hora = fecha_hora %>% ymd_hms(),
          anio = fecha %>% year(),
          mes = fecha %>% month(),
          semana = fecha %>% week(),
@@ -202,7 +227,6 @@ base_para_prediccion <- base_para_prediccion %>%
          fin_de_semana = case_when(dia_semana %in% c("Saturday", "Sunday") ~ 1,
                                                      TRUE ~ 0))
 ```
-
 
 * Implementa una función que para una subestación y una variable, grafique múltiples series de tiempo diarias correspondientes a una lista de fechas. Para esto, la función debe recibir como argumentos: código de una subestación, una variable (serie numérica), y una lista de fechas (año-mes-día). Por ejemplo: para la subestación SE005T002 y la variable gen_solar_total_mwh, la función debe graficar los perfiles diarios de generación solar por hora para las fechas '2019-01-10', '2019-02-10' y '2019-03-10'.
 
@@ -235,6 +259,8 @@ plot_subestacion_variable <- function(codigo_sub_estacion,
 
 * Grafica la curva de generación solar, por hora, en la subestación SE005T002 para las fechas del 10, 11, 12, 13 y 14 de enero de 2019. Haz lo mismo para la subestación SE127T005. Que podrías decir, en términos generales, sobre la generación solar y las dos subestaciones mencionadas, basados en estos dos gráficos?
 
+De la subestación _"SE005T002"_ se puede apreciar que los días tienen una generación similar, llegando hasta los 80 MWh, hasta las 16 horas en las cuales comienzan a demostrar generaciones diferentes, lo cual se puede deber a la puesta del sol o algún efecto metereológico. En cambio, para la subestación _"SE127T005"_ se puede ver rendimientos muy menores a la subestación anterior (con rendimientos máximos de 1 MWh) y muy dispares entre sí.
+
 ```{r, fig.align='center'}
 
 plot_subestacion_variable("SE005T002",
@@ -249,6 +275,8 @@ plot_subestacion_variable("SE127T005",
 ```
 
 * Grafica la curva de generación térmica, por hora, en la subestación SE020G213 para los días 14, 15, 16 y 17 de mayo de 2019. Haz lo mismo para la subestación SE106G216. Que podrías decir, en términos generales, sobre la generación térmica en esta subestación con respecto a este gráfico?
+
+En este caso se puede ver que la subestación _"SE020G213"_ tiene en promedio rendimientos cercanos a los 550 MWh durante el día salvo algunos días con caídas en la producción muy pronunciadas. En cambio, la subestación _"SE106G216"_ tiene valores más cercanos a los 17 MWh pero tan solo una caída para el día 2019-05-15.
 
 ```{r}
 plot_subestacion_variable("SE020G213",
@@ -265,22 +293,47 @@ plot_subestacion_variable("SE106G216",
 
 ## 5. Predicción de desviaciones del costo marginal: modelo 1
 
-Crea una variable target que sea igual a cero cuando la variable cmg_desv_pct esté en el rango [-15,15], e igual uno para cualquier otro caso. Hint: recuerda que existen valores infinitos.
+* Crea una variable target que sea igual a cero cuando la variable `cmg_desv_pct` esté en el rango [-15,15], e igual uno para cualquier otro caso. Hint: recuerda que existen valores infinitos.
 
-Ahora crea los siguientes features:
+```{r}
+base_para_prediccion <- base_para_prediccion %>% 
+  filter(!is.infinite(cmg_desv_pct)) %>%  # Eliminando los valores infinitos
+  mutate(target = case_when(abs(cmg_desv_pct) < 15 ~ 0,
+                            TRUE ~ 1))
+```
 
-* en_total_mwh: suma de las cinco series de generación.
-lags y estadísticas acumuladas (por ejemplo: promedio, varianza) de las variables que consideres relevantes.
-Entrena un modelo que prediga si existirá una desviación en la hora siguiente. Adecúa la variable target para hacer esto posible.
-¿Cómo le va a tu modelo? ¿En qué métricas te basas y por qué?
-¿Cuales son las variables más importantes que considera este modelo?
+* Ahora crea los siguientes features:
+  - en_total_mwh: suma de las cinco series de generación.
+  - lags y estadísticas acumuladas (por ejemplo: promedio, varianza) de las variables que consideres relevantes.
+* Entrena un modelo que prediga si existirá una desviación en la hora siguiente. Adecúa la variable target para hacer esto posible.
+* ¿Cómo le va a tu modelo? ¿En qué métricas te basas y por qué?
+* ¿Cuales son las variables más importantes que considera este modelo?
 
 
+## 6. Predicción de desviaciones del costo marginal: modelo 2
 
+Ahora imagina que te dicen que, en producción, te enviarán datos actualizados del sistema cada 12 horas. ¿Cuál debiese ser tu target a predecir en ese caso? Explica.
+
+Entrena un nuevo modelo con ese target y evalúalo con una métrica que te parezca importante. ¿Cómo se compara con los resultados del modelo 1?
+
+## 7. Merge con datos de clima: modelo 3
+
+Haz un merge con los datos de clima (datos_clima.csv) y entrena nuevamente tu modelo 2.
 
 ```{r}
 # Cargando los datasets
 datos_clima <- read_csv("datos_clima.csv")
-
 ```
+
+¿Cómo manejas el data leakage en este caso?
+¿Cuánto mejora la capacidad predictiva del modelo? ¿Cuáles variables son las más importantes?
+
+## 8. Reflexión
+
+¿Por qué sería bueno utilizar un modelo como este para anticiparse a desvíos de precios de la energía?
+¿Qué casos de uso te imaginas podrían beneficiarse teniendo acceso a un modelo como este?
+
+Utilizar modelos para anticiparse a los desvíos deprecios de la energía son beneficiosos para todos los jugadores del mercado energético ya que les permite identificar los precios en los distintos tramos del proceso de generación. La predicción lo más ajustada posible permite hacer modelos económicos, de consumo y de generación que terminan redituando en un manejo más eficiente de las compañías y del Estado.
+
+Por ejemplo, si una compañia generadora de energía puede predecir el costo marginal esperado en las próximas horas, puede ajustar su modelo económico de corto plazo (realizando erogaciones no esperadas por costos mayores o inversiones de corto plazo con el monto de dinero sobrante). A su vez, permite hacer un mejor uso de la red de electricidad a nivel país ya que dependiendo de la producción de energía en las próximas horas se pueden implementar medidas de importación o exportación para atender a los picos o valles de consumo o una redistribución de la energía hacia polos industriales o residenciales.
 
